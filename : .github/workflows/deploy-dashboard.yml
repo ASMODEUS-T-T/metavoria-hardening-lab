@@ -1,0 +1,75 @@
+# .github/workflows/deploy-dashboard.yml
+name: CI/CD — Wazuh ML Dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "wazuh-dashboard-ml/**"
+      - ".github/workflows/deploy-dashboard.yml"
+  workflow_dispatch:   # permet un lancement manuel depuis l'onglet Actions
+
+env:
+  IMAGE_NAME: wazuh-ml-dashboard
+  APP_DIR: wazuh-dashboard-ml/app    # dossier contenant le Dockerfile
+  DEPLOYMENT: wazuh-ml-dashboard     # nom du Deployment Kubernetes
+  CONTAINER: wazuh-ml-dashboard      # nom du conteneur dans le Deployment
+  NAMESPACE: wazuh-ml
+  KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+jobs:
+  test:
+    name: Tests & lint Python
+    runs-on: [self-hosted, Linux]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer les dépendances de test
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install --quiet -r ${APP_DIR}/requirements.txt ruff pytest
+
+      - name: Lint (ruff)
+        run: . .venv/bin/activate && ruff check ${APP_DIR}
+
+      - name: Tests unitaires (pytest)
+        run: |
+          . .venv/bin/activate
+          if [ -d "${APP_DIR}/tests" ]; then pytest ${APP_DIR}/tests -q; else echo "Aucun test, étape ignorée"; fi
+
+  build-and-deploy:
+    name: Build image & déploiement k3s
+    needs: test
+    runs-on: [self-hosted, Linux]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build de l'image Docker
+        run: |
+          docker build \
+            -t ${IMAGE_NAME}:${{ github.sha }} \
+            -t ${IMAGE_NAME}:latest \
+            ${APP_DIR}
+
+      - name: Import dans containerd (k3s)
+        run: docker save ${IMAGE_NAME}:${{ github.sha }} | sudo /usr/local/bin/k3s ctr images import -
+
+      - name: Mise à jour du Deployment
+        run: |
+          kubectl -n ${NAMESPACE} set image deployment/${DEPLOYMENT} \
+            ${CONTAINER}=docker.io/library/${IMAGE_NAME}:${{ github.sha }}
+          kubectl -n ${NAMESPACE} annotate deployment/${DEPLOYMENT} \
+            kubernetes.io/change-cause="CI ${{ github.sha }} — ${{ github.event.head_commit.message }}" --overwrite
+
+      - name: Attente du rollout
+        run: kubectl -n ${NAMESPACE} rollout status deployment/${DEPLOYMENT} --timeout=120s
+
+      - name: Vérification HTTPS
+        run: |
+          curl -sk --max-time 10 -o /dev/null -w "HTTP %{http_code}\n" https://wazuh-ml.lab.local/ \
+            --resolve wazuh-ml.lab.local:443:127.0.0.1
+
+      - name: Nettoyage des anciennes images locales
+        if: always()
+        run: docker image prune -f > /dev/null
