@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Wazuh Stats &amp; ML Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #1a2233;
+    --accent: #4fd1c5;
+    --accent2: #f6ad55;
+    --text: #e8ecf1;
+    --muted: #8a94a6;
+    --low: #38a169;
+    --medium: #d69e2e;
+    --high: #dd6b20;
+    --critical: #e53e3e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px 0; }
+  .subtitle { color: var(--muted); margin-bottom: 24px; font-size: 13px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .card {
+    background: var(--panel);
+    border-radius: 10px;
+    padding: 18px;
+    border: 1px solid #2a3446;
+  }
+  .card h3 { margin: 0 0 12px 0; font-size: 14px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .kpi { font-size: 32px; font-weight: 700; }
+  .kpi-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .charts { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 24px; }
+  @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
+  .severity-badge {
+    display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;
+  }
+  .sev-Low { background: rgba(56,161,105,.2); color: var(--low); }
+  .sev-Medium { background: rgba(214,158,46,.2); color: var(--medium); }
+  .sev-High { background: rgba(221,107,32,.2); color: var(--high); }
+  .sev-Critical { background: rgba(229,62,62,.2); color: var(--critical); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #2a3446; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  .predict-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .predict-form input {
+    flex: 1; min-width: 200px; padding: 8px 10px; border-radius: 6px; border: 1px solid #2a3446;
+    background: #0f1420; color: var(--text);
+  }
+  .predict-form button {
+    padding: 8px 16px; border-radius: 6px; border: none; background: var(--accent);
+    color: #0f1420; font-weight: 600; cursor: pointer;
+  }
+  #severity-result { margin-top: 12px; font-size: 13px; }
+  .footer { color: var(--muted); font-size: 11px; margin-top: 32px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>🛡️ Wazuh — Statistiques &amp; Prédiction ML</h1>
+<div class="subtitle" id="last-refresh">Chargement...</div>
+
+<div class="grid" id="kpi-grid"></div>
+
+<div class="charts">
+  <div class="card">
+    <h3>Volume d'alertes (historique + prédiction)</h3>
+    <canvas id="volumeChart" height="110"></canvas>
+  </div>
+  <div class="card">
+    <h3>Répartition par sévérité</h3>
+    <canvas id="severityChart" height="140"></canvas>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h3>Top 5 règles déclenchées</h3>
+    <table id="top-rules-table">
+      <thead><tr><th>Règle</th><th>Occurrences</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h3>Top 5 agents</h3>
+    <table id="top-agents-table">
+      <thead><tr><th>Agent</th><th>Alertes</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:24px;">
+  <h3>Classifier une nouvelle alerte (description libre)</h3>
+  <div class="predict-form">
+    <input id="desc-input" type="text" placeholder="Ex: Multiple authentication failures detected via SSH">
+    <button onclick="predictSeverity()">Prédire la sévérité</button>
+  </div>
+  <div id="severity-result"></div>
+</div>
+
+<div class="footer">Wazuh Stats &amp; ML Dashboard — projet stage Metavoria</div>
+
+<script>
+let volumeChart, severityChart;
+const sevColors = { Low: '#38a169', Medium: '#d69e2e', High: '#dd6b20', Critical: '#e53e3e' };
+
+async function loadDashboard() {
+  try {
+    const stats = await (await fetch('/api/stats')).json();
+    const volHistory = await (await fetch('/api/volume-history?last_n=48')).json();
+    const volPredict = await (await fetch('/api/predict-volume?n_hours=6')).json();
+
+    document.getElementById('last-refresh').textContent =
+      'Dernière synchronisation Wazuh : ' + new Date(stats.last_refresh + 'Z').toLocaleString('fr-FR');
+
+    renderKpis(stats);
+    renderVolumeChart(volHistory, volPredict.predicted_counts);
+    renderSeverityChart(stats.severity_distribution);
+    renderTable('top-rules-table', stats.top_rules.map(r => [r.description || r.rule_id, r.count]));
+    renderTable('top-agents-table', Object.entries(stats.top_agents));
+  } catch (e) {
+    document.getElementById('last-refresh').textContent = 'Erreur de chargement : ' + e.message;
+  }
+}
+
+function renderKpis(stats) {
+  const grid = document.getElementById('kpi-grid');
+  const sevOrder = ['Critical', 'High', 'Medium', 'Low'];
+  let html = `<div class="card"><h3>Total alertes (${14}j)</h3><div class="kpi">${stats.total_alerts}</div></div>`;
+  sevOrder.forEach(s => {
+    const count = stats.severity_distribution[s] || 0;
+    html += `<div class="card"><h3><span class="severity-badge sev-${s}">${s}</span></h3><div class="kpi">${count}</div></div>`;
+  });
+  grid.innerHTML = html;
+}
+
+function renderVolumeChart(history, predicted) {
+  const ctx = document.getElementById('volumeChart');
+  const predLabels = predicted.map((_, i) => '+' + (i + 1) + 'h');
+  const labels = [...history.labels, ...predLabels];
+  const histData = [...history.values, ...Array(predicted.length).fill(null)];
+  const predData = [...Array(history.values.length - 1).fill(null), history.values[history.values.length - 1], ...predicted];
+
+  if (volumeChart) volumeChart.destroy();
+  volumeChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Historique', data: histData, borderColor: '#4fd1c5', backgroundColor: 'rgba(79,209,197,.1)', tension: .3, fill: true },
+        { label: 'Prédiction', data: predData, borderColor: '#f6ad55', borderDash: [6, 4], tension: .3 },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#e8ecf1' } } },
+      scales: {
+        x: { ticks: { color: '#8a94a6', maxTicksLimit: 10 }, grid: { color: '#2a3446' } },
+        y: { ticks: { color: '#8a94a6' }, grid: { color: '#2a3446' }, beginAtZero: true }
+      }
+    }
+  });
+}
+
+function renderSeverityChart(distribution) {
+  const ctx = document.getElementById('severityChart');
+  const labels = Object.keys(distribution);
+  const values = Object.values(distribution);
+  const colors = labels.map(l => sevColors[l] || '#888');
+
+  if (severityChart) severityChart.destroy();
+  severityChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
+    options: { plugins: { legend: { labels: { color: '#e8ecf1' } } } }
+  });
+}
+
+function renderTable(id, rows) {
+  const tbody = document.querySelector('#' + id + ' tbody');
+  tbody.innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');
+}
+
+async function predictSeverity() {
+  const desc = document.getElementById('desc-input').value;
+  const resDiv = document.getElementById('severity-result');
+  if (!desc) return;
+  resDiv.textContent = 'Analyse...';
+  try {
+    const res = await fetch('/api/predict-severity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: desc })
+    });
+    const data = await res.json();
+    const probaStr = Object.entries(data.probabilities)
+      .map(([k, v]) => `${k}: ${(v * 100).toFixed(0)}%`).join(' · ');
+    resDiv.innerHTML = `Sévérité prédite : <span class="severity-badge sev-${data.predicted_severity}">${data.predicted_severity}</span>
+      <div style="color:#8a94a6; margin-top:6px;">${probaStr}</div>`;
+  } catch (e) {
+    resDiv.textContent = 'Erreur : ' + e.message;
+  }
+}
+
+loadDashboard();
+setInterval(loadDashboard, 60000);
+</script>
+</body>
+</html>

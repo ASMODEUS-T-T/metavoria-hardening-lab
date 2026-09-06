@@ -1,0 +1,7 @@
+
+---
+- name: Durcissement CIS Benchmark Ubuntu 22.04
+  hosts: vierge
+  become: true
+  roles:
+    - hardening

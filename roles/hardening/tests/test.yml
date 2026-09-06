@@ -1,0 +1,6 @@
+---
+- name: Test du rôle hardening
+  hosts: localhost
+  remote_user: root
+  roles:
+    - hardening

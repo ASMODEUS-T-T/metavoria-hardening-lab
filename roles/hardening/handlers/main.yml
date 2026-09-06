@@ -1,0 +1,9 @@
+---
+# handlers file for roles/hardening
+- name: Redémarrer SSH
+  ansible.builtin.service:
+    name: ssh
+    state: restarted
+- name: Recharger les règles auditd
+  ansible.builtin.command: augenrules --load
+  changed_when: true
