@@ -1,0 +1,8 @@
+# Politique de lint du dashboard : bloquer uniquement sur des erreurs réelles
+line-length = 120
+
+[lint]
+# E = erreurs pycodestyle, F = pyflakes (imports inutilisés, noms non définis),
+# B = bugbear (pièges Python courants)
+select = ["E", "F", "B"]
+ignore = ["E501"]  # longueur de ligne gérée par line-length
