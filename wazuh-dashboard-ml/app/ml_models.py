@@ -44,7 +44,7 @@ class SeverityClassifier:
         pred = self.pipeline.predict(text)[0]
         return {
             "predicted_severity": pred,
-            "probabilities": dict(zip(self.classes_, [round(float(p), 3) for p in proba])),
+            "probabilities": dict(zip(self.classes_, [round(float(p), 3) for p in proba], strict=True)),
         }
 
     def score_report(self, df: pd.DataFrame) -> dict:
