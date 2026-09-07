@@ -63,7 +63,7 @@ jobs:
             kubernetes.io/change-cause="CI ${{ github.sha }} — ${{ github.event.head_commit.message }}" --overwrite
 
       - name: Attente du rollout
-        run: kubectl -n ${NAMESPACE} rollout status deployment/${DEPLOYMENT} --timeout=120s
+        run: kubectl -n ${NAMESPACE} rollout status deployment/${DEPLOYMENT} --timeout=300s
 
       - name: Vérification HTTPS
         run: |
